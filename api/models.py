@@ -6,6 +6,7 @@ from django.core.validators import RegexValidator
 from django.contrib.gis.db import models
 from django.contrib.gis.geos import MultiPolygon, Polygon
 from django.contrib.auth import get_user_model
+from django.contrib.auth.models import Group
 from django.contrib.postgres.search import SearchVectorField
 from django.contrib.postgres.indexes import GinIndex, BTreeIndex
 from django.utils import timezone
@@ -122,6 +123,10 @@ class Identity(AbstractIdentity):
     """
     All users have an Identity but not all identities are users.
     """
+    class PreferredLanguage(models.TextChoices):
+        ENGLISH = "EN", _("English")
+        GERMAN = "DE", _("German")
+        FRENCH = "FR", _("French")
 
     user = models.OneToOneField(
         UserModel,
@@ -142,6 +147,13 @@ class Identity(AbstractIdentity):
                 message=_("IDE number is not valid"),
             ),
         ],
+    )
+    language = models.CharField(
+        _("language"),
+        max_length=10,
+        choices=PreferredLanguage.choices,
+        default=PreferredLanguage.GERMAN,
+        null=True,
     )
     contract_accepted = models.DateField(_("contract_accepted"), null=True, blank=True)
     is_public = models.BooleanField(_("is_public"), default=False)
@@ -483,6 +495,7 @@ class Product(models.Model):
     )
     ts = SearchVectorField(null=True)
     bbox = settings.DEFAULT_EXTENT
+    max_order_area = models.IntegerField(_("max_order_area"), default=settings.MAX_ORDER_AREA)
     geom = models.MultiPolygonField(
         _("geom"),
         srid=settings.DEFAULT_SRID,
@@ -510,6 +523,20 @@ class Product(models.Model):
 
     thumbnail_tag.short_description = _("thumbnail")
 
+class ProductOwnership(models.Model):
+    user_group = models.ForeignKey(
+        Group, models.CASCADE, verbose_name=_("user_group")
+    )
+    product = models.ForeignKey(
+        Product, models.CASCADE, verbose_name=_("product"), default=1
+    )
+    geom = models.MultiPolygonField(
+        _("geom"),
+        srid=settings.DEFAULT_SRID,
+        default=MultiPolygon(Polygon.from_bbox(settings.DEFAULT_EXTENT)))
+
+    def __str__(self):
+        return f'Product ownership for "{self.user_group}" in "{self.product}"'
 
 class Order(models.Model):
     """
@@ -536,6 +563,8 @@ class Order(models.Model):
                 message=_("Title contains forbidden characters"),
             ),
         ],
+        blank=True,
+        null=False
     )
     description = models.TextField(_("description"), blank=True)
     processing_fee = MoneyField(
@@ -571,6 +600,8 @@ class Order(models.Model):
         null=True,
     )
     geom = models.PolygonField(_("geom"), srid=settings.DEFAULT_SRID)
+    excludedGeom = models.PolygonField(_("excludedGeom"), srid=settings.DEFAULT_SRID, blank=True, null=True)
+
     client = models.ForeignKey(
         UserModel, models.PROTECT, verbose_name=_("client"), blank=True
     )
@@ -601,6 +632,7 @@ class Order(models.Model):
     date_downloaded = models.DateTimeField(_("date_downloaded"), blank=True, null=True)
     date_processed = models.DateTimeField(_("date_processed"), blank=True, null=True)
     extract_result = models.FileField(upload_to="extract", null=True, blank=True)
+    extract_result_size = models.IntegerField(_("extract_result_size"), null=True, blank=True)
     download_guid = models.UUIDField(_("download_guid"), null=True, blank=True)
 
     class Meta:
@@ -616,7 +648,7 @@ class Order(models.Model):
 
     def ask_price(self):
         send_geoshop_email(
-            _("Geoshop - Quote requested"),
+            "Geoshop - Quote requested",
             template_name="email_admin",
             template_data={
                 "messages": [_("A new quote has been requested:")],
@@ -625,6 +657,7 @@ class Order(models.Model):
                     _("link"): reverse("admin:api_order_change", args=[self.id]),
                 },
             },
+            language=self.client.identity.language
         )
 
     def set_price(self):
@@ -656,7 +689,7 @@ class Order(models.Model):
             self.order_status = self.OrderStatus.QUOTE_DONE
             self.save()
             send_geoshop_email(
-                _("Geoshop - Quote has been done"),
+                "Geoshop - Quote has been done",
                 recipient=self.email_deliver or self.client.identity,
                 template_name="email_quote_done",
                 template_data={
@@ -664,6 +697,7 @@ class Order(models.Model):
                     "first_name": self.client.identity.first_name,
                     "last_name": self.client.identity.last_name,
                 },
+                language=self.client.identity.language
             )
         return price_is_set
 
@@ -758,12 +792,13 @@ class Order(models.Model):
                     self.order_status = Order.OrderStatus.PROCESSED
                     self.date_processed = timezone.now()
                     send_geoshop_email(
-                        _("Geoshop - Download ready"),
+                        "Geoshop - Download ready",
                         recipient=self.email_deliver or self.client.identity,
                         template_name="email_download_ready",
                         template_data={
                             "order_id": self.id,
                             "download_guid": self.download_guid,
+                            "backend_url":  settings.BACKEND_URL,
                             "front_url": "{}://{}{}".format(
                                 settings.FRONT_PROTOCOL,
                                 settings.FRONT_URL,
@@ -772,6 +807,7 @@ class Order(models.Model):
                             "first_name": self.client.identity.first_name,
                             "last_name": self.client.identity.last_name,
                         },
+                        language=self.client.identity.language
                     )
             else:
                 self.order_status = Order.OrderStatus.REJECTED
@@ -855,6 +891,7 @@ class OrderItem(models.Model):
     extract_result = models.FileField(
         upload_to=RandomFileName("extract"), null=True, blank=True
     )
+    extract_result_size = models.IntegerField(_("extract_result_size"), null=True, blank=True)
     comment = models.TextField(_("comment"), null=True, blank=True)
     token = models.CharField(_("token"), max_length=256, null=True, blank=True)
     download_guid = models.UUIDField(_("download_guid"), null=True, blank=True, unique=True)
@@ -978,7 +1015,7 @@ class OrderItem(models.Model):
             .first()
         )
         send_geoshop_email(
-            _("Geoshop - Validation requested"),
+            "Geoshop - Validation requested",
             recipient=validator.contact_person,
             template_name="email_validation_needed",
             template_data={
@@ -988,6 +1025,7 @@ class OrderItem(models.Model):
                 "what": "orderitem",
                 "token": self.token,
             },
+            language=self.order.client.identity.language,
         )
 
 

@@ -2,14 +2,37 @@ import json
 
 from django.urls import reverse
 from django.core import mail
-from django.test import override_settings
+
+from math import isclose
+from django.contrib.gis.geos import Polygon
 
 from djmoney.money import Money
 from rest_framework import status
 from rest_framework.test import APITestCase
-from api.models import Contact, OrderItem, Order, Metadata, Product, ProductFormat
+from api.models import (
+  Contact,
+  OrderItem,
+  Order,
+  Metadata,
+  Product,
+  ProductFormat,
+)
 from api.tests.factories import BaseObjectsFactory
 
+def updateMaxOrderArea(product, area):
+    fromDb = Product.objects.get(label=product)
+    fromDb.max_order_area = area
+    fromDb.save()
+
+def areasEqual(geomA, geomB, srid: int = 2056) -> bool:
+    """We can consider polygons equal if """
+    polyA = Polygon(geomA['coordinates'][0], srid=srid)
+    polyB = Polygon(geomB['coordinates'][0], srid=srid)
+    intAB = polyA.intersection(polyB).area
+    uniAB = polyA.union(polyB).area
+    return (isclose(intAB, polyA.area) and isclose(intAB, polyB.area) and
+            isclose(uniAB, polyA.area) and isclose(uniAB, polyB.area) and
+            isclose(polyA.difference(polyB).area, 0))
 
 class OrderTests(APITestCase):
     """
@@ -64,7 +87,8 @@ class OrderTests(APITestCase):
         url = reverse('order-list')
         response = self.client.post(url, self.order_data, format='json')
         # Forbidden if not logged in
-        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED, response.content)
+        self.assertIn(response.status_code,
+                      [status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN], response.content)
         self.client.credentials(HTTP_AUTHORIZATION='Bearer ' + self.config.client_token)
         response = self.client.post(url, self.order_data, format='json')
         self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.content)
@@ -89,12 +113,13 @@ class OrderTests(APITestCase):
         # Update
         data = {
             "items": [{
-                "product": "Produit gratuit"}]
+                "product": {"label": "Produit gratuit"}
+        }]
         }
 
         response = self.client.patch(url, data, format='json')
         self.assertEqual(response.status_code, status.HTTP_200_OK, response.content)
-        self.assertEqual(response.data['items'][0]['product'], data['items'][0]['product'], 'Check product')
+        self.assertEqual(response.data['items'][0]['product']['label'], data['items'][0]['product']['label'], 'Check product')
         self.assertEqual(
             response.data['items'][0]['price_status'], OrderItem.PricingStatus.CALCULATED, 'Check price is calculated')
         self.assertIsNotNone(response.data['items'][0]['available_formats'], 'Check available formats are present')
@@ -125,7 +150,7 @@ class OrderTests(APITestCase):
         # Edit order that's already confirmed, should not work
         data = {
             "items": [{
-                "product": "Produit forfaitaire"}]
+                "product": {"label": "Produit forfaitaire"}}]
         }
         url = reverse('order-detail', kwargs={'pk':order_id})
         response = self.client.patch(url, data, format='json')
@@ -145,7 +170,7 @@ class OrderTests(APITestCase):
         data = {
             "items": [
                 {
-                    "product": "Maquette 3D",
+                    "product": {"label": "Maquette 3D"},
                     "data_format": "Rhino 3DM"
                 }
             ]
@@ -155,7 +180,7 @@ class OrderTests(APITestCase):
         response = self.client.patch(url, data, format='json')
         self.assertEqual(response.status_code, status.HTTP_200_OK, response.content)
         ordered_item = response.data['items'][0]
-        self.assertEqual(ordered_item['product'], data['items'][0]['product'], 'Check product')
+        self.assertEqual(ordered_item['product']['label'], data['items'][0]['product']['label'], 'Check product')
         self.assertEqual(ordered_item['product_provider'], self.config.provider.identity.company_name, 'Check provider is present')
         self.assertEqual(ordered_item['price_status'], OrderItem.PricingStatus.PENDING, 'Check quote is needed')
         self.assertIsNone(response.data['processing_fee'], 'Check quote is needed')
@@ -202,7 +227,7 @@ class OrderTests(APITestCase):
         data = {
             "items": [
                 {
-                    "product": "MO",
+                    "product": {"label": "MO"},
                     "data_format": "Geobat NE complet (DXF)"
                 }
             ]
@@ -235,7 +260,7 @@ class OrderTests(APITestCase):
         data = {
             "items": [
                 {
-                    "product": "MO",
+                    "product": {"label": "MO"},
                     "data_format": "Geobat NE complet (DXF)"
                 }
             ]
@@ -265,7 +290,7 @@ class OrderTests(APITestCase):
         data1 = {
             "items": [
                 {
-                    "product": "Produit forfaitaire"
+                    "product": {"label": "Produit forfaitaire"}
                 }
             ]
         }
@@ -277,9 +302,9 @@ class OrderTests(APITestCase):
         data2 = {
             "items": [
                 {
-                    "product": "Produit forfaitaire"
+                    "product": {"label": "Produit forfaitaire"}
                 },{
-                    "product": "Produit gratuit"
+                    "product": {"label": "Produit gratuit"}
                 }
             ]
         }
@@ -379,11 +404,11 @@ class OrderTests(APITestCase):
         data = {
             "items": [
                 {
-                    "product": product_name_to_order,
+                    "product": {"label": product_name_to_order},
                     "data_format": "DXF"
                 },
                 {
-                    "product": "MO",
+                    "product": {"label": "MO"},
                     "data_format": "Geobat NE complet (DXF)"
                 }
             ]
@@ -432,38 +457,188 @@ class OrderTests(APITestCase):
         """
         self.order_item_validation(True)
 
-    @override_settings(MAX_ORDER_AREA = 1000)
     def test_order_geom_is_too_big(self):
+        updateMaxOrderArea('Produit gratuit', 1000)
         url = reverse('order-list')
         self.client.credentials(HTTP_AUTHORIZATION='Bearer ' + self.config.client_token)
+        self.order_data['items'] = [{ 'product': {'label': 'Produit gratuit'} }]
         self.order_data['geom'] = {
             'type': 'Polygon',
             'coordinates': [
+                # 2545488 1203070, 2557441 1202601, 2557089 1210921, 2545605 1211390, 2545488 1203070
                 [[2545488, 1203070],
-                 [2545605, 1211390],
                  [2557441, 1202601],
                  [2557089, 1210921],
+                 [2545605, 1211390],
                  [2545488, 1203070]]
             ]}
         response = self.client.post(url, self.order_data, format='json')
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST, response.content)
         errorDetails = json.loads(response.content)
         self.assertEqual(errorDetails['message'], ['Order area is too large'])
-        self.assertEqual(errorDetails['expected'], ['1000'])
-        self.assertTrue(errorDetails['actual'][0].startswith('109980.5'))
+        self.assertTrue(errorDetails['expected'][0].startswith('34558655.8'))
+        self.assertTrue(errorDetails['actual'][0].startswith('97442812.5'))
 
-    @override_settings(MAX_ORDER_AREA = 1000000)
     def test_order_geom_is_fine(self):
+        updateMaxOrderArea('Produit gratuit', 1000000000)
         url = reverse('order-list')
         self.client.credentials(HTTP_AUTHORIZATION='Bearer ' + self.config.client_token)
+        self.order_data['items'] = [{ 'product': {'label': 'Produit gratuit'} }]
         self.order_data['geom'] = {
             'type': 'Polygon',
             'coordinates': [
                 [[2545488, 1203070],
-                 [2545605, 1211390],
                  [2557441, 1202601],
                  [2557089, 1210921],
+                 [2545605, 1211390],
                  [2545488, 1203070]]
             ]}
         response = self.client.post(url, self.order_data, format='json')
         self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.content)
+
+    def test_order_owned_noExcluded(self):
+        updateMaxOrderArea('Produit gratuit', 100)
+        url = reverse('order-list')
+        self.client.credentials(HTTP_AUTHORIZATION='Bearer ' + self.config.client_token)
+        self.order_data['items'] = [{
+                'product': {'label': 'Produit gratuit'},
+        }]
+        self.order_data['geom'] = {
+            'type': 'Polygon',
+            'coordinates': [
+                [[2682192.2803059844, 1246970.4157564922],
+                 [2682178.2106039342, 1247984.965345809],
+                 [2683720.8073948864, 1248006.558970477],
+                 [2683735.1414241255, 1246992.0130589735],
+                 [2682192.2803059844, 1246970.4157564922]]
+            ]}
+        response = self.client.post(url, self.order_data, format='json')
+        order = json.loads(response.content)
+
+        self.assertEqual(len(order["excludedGeom"]["coordinates"]), 0)
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.content)
+
+    def test_order_owned_intersects_toobig(self):
+        updateMaxOrderArea('Produit gratuit', 1001)
+        url = reverse('order-list')
+        self.client.credentials(HTTP_AUTHORIZATION='Bearer ' + self.config.client_token)
+        self.order_data['items'] = [{
+                'product': {'label': 'Produit gratuit'},
+        }]
+        self.order_data['geom'] = {
+            'type': 'Polygon',
+            'coordinates': [
+                [[2651783.430446268, 1248297.3690953483],
+                 [2651756.3479182185, 1251397.9173197772],
+                 [2717461.37168784, 1252336.6990602014],
+                 [2717522.8814288364, 1249236.639547884],
+                 [2651783.430446268, 1248297.3690953483]]
+            ]}
+        response = self.client.post(url, self.order_data, format='json')
+
+        errorDetails = json.loads(response.content)
+        self.assertEqual(errorDetails['message'], ['Order area is too large'])
+        self.assertTrue(errorDetails['expected'][0].startswith('34558656.85'))
+        self.assertTrue(errorDetails['actual'][0].startswith('203800502.0'))
+
+    def test_order_unowned_limited(self):
+        updateMaxOrderArea('Produit gratuit', 10000)
+        url = reverse('order-list')
+        self.client.credentials(HTTP_AUTHORIZATION='Bearer ' + self.config.client_token)
+        self.order_data['items'] = [{
+                'product': {'label': 'Produit gratuit'},
+        }]
+        self.order_data['geom'] = {
+            'type': 'Polygon',
+            'coordinates': [
+                [[2682058.9416315095, 1246529.024343783],
+                 [2682052.9914918, 1246958.8119991398],
+                 [2682208.5772218467, 1246960.9680303528],
+                 [2682214.538653401, 1246531.1805305541],
+                 [2682058.9416315095, 1246529.024343783]]
+            ]}
+        response = self.client.post(url, self.order_data, format='json')
+        order = json.loads(response.content)
+
+        self.assertEqual(len(order["excludedGeom"]["coordinates"]), 1)
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.content)
+
+class OrderValidationTests(APITestCase):
+
+    def setUp(self):
+        self.config = BaseObjectsFactory(self.client)
+        self.order_data = {
+            'order_type': 'Privé',
+            'items': [],
+            'title': 'Test 1734',
+            'description': 'Nice order',
+            'geom': {
+                'type': 'Polygon',
+                'coordinates': [
+                    [
+                        [
+                            2528577.8382161376,
+                            1193422.4003930448
+                        ],
+                        [
+                            2542482.6542869355,
+                            1193422.4329014618
+                        ],
+                        [
+                            2542482.568523701,
+                            1199018.36469272
+                        ],
+                        [
+                            2528577.807487005,
+                            1199018.324372703
+                        ],
+                        [
+                            2528577.8382161376,
+                            1193422.4003930448
+                        ]
+                    ]
+                ]
+            },
+        }
+
+    def test_order_toolarge(self):
+        updateMaxOrderArea('Produit gratuit', 1000)
+        url = reverse('validate-order')
+        self.client.credentials(HTTP_AUTHORIZATION='Bearer ' + self.config.client_token)
+        self.order_data['items'] = [{ 'product': {'label': 'Produit gratuit'} }]
+        self.order_data['geom'] = {
+            'type': 'Polygon',
+            'coordinates': [
+                # 2545488 1203070, 2557441 1202601, 2557089 1210921, 2545605 1211390, 2545488 1203070
+                [[2545488, 1203070],
+                 [2557441, 1202601],
+                 [2557089, 1210921],
+                 [2545605, 1211390],
+                 [2545488, 1203070]]
+            ]}
+        response = self.client.post(url, self.order_data, format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.content)
+        errorDetails = json.loads(response.content)["error"]
+        self.assertEqual(errorDetails['message'], ['Order area is too large'])
+        self.assertTrue(errorDetails['expected'][0].startswith('34558655.8'))
+        self.assertTrue(errorDetails['actual'][0].startswith('97442812.5'))
+
+    def test_order_fine(self):
+        updateMaxOrderArea('Produit gratuit', 1000000000)
+        url = reverse('validate-order')
+        self.client.credentials(HTTP_AUTHORIZATION='Bearer ' + self.config.client_token)
+        self.order_data['items'] = [{ 'product': {'label': 'Produit gratuit'} }]
+        self.order_data['geom'] = {
+            'type': 'Polygon',
+            'coordinates': [
+                [[2545488, 1203070],
+                 [2557441, 1202601],
+                 [2557089, 1210921],
+                 [2545605, 1211390],
+                 [2545488, 1203070]]
+            ]}
+        response = self.client.post(url, self.order_data, format='json')
+        responseData = response.json()
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.content)
+        self.assertEqual(responseData['geom'], 'SRID=4326;POLYGON ((2545488 1203070, 2557441 1202601, 2557089 1210921, 2545605 1211390, 2545488 1203070))')
+        self.assertEqual(responseData['excludedGeom'], 'SRID=2056;POLYGON ((2545605 1211390, 2557089 1210921, 2557441 1202601, 2545488 1203070, 2545605 1211390))')

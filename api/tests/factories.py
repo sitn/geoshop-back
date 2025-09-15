@@ -1,12 +1,12 @@
 import os
 from django.contrib.auth import get_user_model
-from django.contrib.gis.geos import Polygon
+from django.contrib.gis.geos import Polygon, MultiPolygon
 from django.core import management
 from djmoney.money import Money
 from django.utils import timezone
 from django.urls import reverse
 
-from api.models import Contact, DataFormat, Metadata, Order, OrderType, Pricing, Product, ProductFormat
+from api.models import Contact, DataFormat, Metadata, Order, OrderType, Pricing, Product, ProductFormat, Group, ProductOwnership
 
 UserModel = get_user_model()
 TOKEN_URL = reverse('token_obtain_pair')
@@ -193,6 +193,41 @@ class BaseObjectsFactory:
             geom=Polygon.from_bbox((2528577, 1193422, 2542482, 1199018)),
             date_ordered=timezone.now()
         )
+
+        self.zurichDataOwner = ProductOwnership.objects.create(
+            user_group=Group.objects.create(name="zurich_data_owner"),
+            product=self.products['free'],
+            geom=MultiPolygon([Polygon([
+            [2678084.641714959, 1246491.459194262],
+            [2678026.5975109423, 1250897.6804795086],
+            [2685865.173103665, 1251006.1324528102],
+            [2685929.053569935, 1246599.9914154143],
+            [2678084.641714959, 1246491.459194262]
+        ])]))
+        self.lausanneDataOwner = ProductOwnership.objects.create(
+            user_group=Group.objects.create(name="lausanne_data_owner"),
+            product=self.products['free'],
+            geom=MultiPolygon([Polygon([
+            [2534861.402730483, 1150239.0030801909],
+            [2534923.142683635, 1155936.9007802252],
+            [2542953.5027929996, 1155855.250616442],
+            [2542899.372803648, 1150157.2750742848],
+            [2534861.402730483, 1150239.0030801909]
+        ])]))
+        self.switzerlandDataOwner = ProductOwnership.objects.create(
+            user_group=Group.objects.create(name="switzerland_data_owner"),
+            product=self.products['free'],
+            geom=MultiPolygon([Polygon([
+            [2449355.7225977806, 1064320.9468696574],
+            [2455237.7729970617, 1302556.4191441573],
+            [2841601.3432626957, 1305741.504752999],
+            [2851408.7686695675, 1067635.8085796747],
+            [2449355.7225977806, 1064320.9468696574]
+        ])]))
+
+        zurichOwners = self.zurichDataOwner.user_group
+        zurichOwners.user_set.add(self.user_private)
+        zurichOwners.save()
 
 
 class ExtractFactory:

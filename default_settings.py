@@ -25,15 +25,17 @@ if os.name == 'nt' and os.environ.get('DEBUG'):
     GEOS_LIBRARY_PATH = 'C:/OSGeo4W/bin/geos_c'
 
 ALLOWED_HOSTS = os.environ["ALLOWED_HOST"].split(",")
-EMAIL_HOST = os.environ.get('EMAIL_HOST', 'localhost')
-EMAIL_PORT = os.environ.get('EMAIL_PORT', 1025)
-# Setting to test email sending in console
-EMAIL_BACKEND = os.environ.get('EMAIL_BACKEND', 'django.core.mail.backends.console.EmailBackend')
 
-#
 DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', 'DEFAUL_FROM_EMAIL@example.com')
 ADMIN_EMAIL_LIST = os.environ.get('ADMIN_EMAIL_LIST', 'ADMIN_EMAIL_LIST@example.com')
 REPLY_TO_EMAIL = os.environ.get('REPLY_TO_EMAIL', 'REPLY_TO_EMAIL@example.ch')
+
+EMAIL_HOST = os.environ.get('EMAIL_HOST', 'localhost')
+EMAIL_PORT = os.environ.get('EMAIL_PORT', 1025)
+EMAIL_HOST_USER = os.environ.get('EMAIL_HOST_USER')
+EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD')
+EMAIL_USE_TLS=True
+EMAIL_BACKEND = os.environ.get('EMAIL_BACKEND', 'django.core.mail.backends.console.EmailBackend')
 
 # Application definition
 
@@ -247,6 +249,7 @@ MEDIA_URL = os.environ.get('MEDIA_URL', FORCE_SCRIPT_NAME + ROOTURL +'/files/')
 
 FRONT_PROTOCOL = os.environ["FRONT_PROTOCOL"]
 FRONT_URL = os.environ["FRONT_URL"]
+BACKEND_URL = os.environ.get("BACKEND_URL", "localhost:8000")
 FRONT_HREF = os.environ.get("FRONT_HREF", '')
 CSRF_COOKIE_DOMAIN = os.environ["CSRF_COOKIE_DOMAIN"]
 CSRF_TRUSTED_ORIGINS = []
@@ -285,6 +288,7 @@ HEALTH_CHECK = {
 FEATURE_FLAGS = {
     "oidc": os.environ.get("OIDC_ENABLED", "False") == "True",
     "registration": os.environ.get("REGISTRATION_ENABLED", "True") == "True",
+    "local_auth": os.environ.get("LOCAL_AUTH_ENABLED", "True") == "True"
 }
 
 AUTHENTICATION_BACKENDS = ("django.contrib.auth.backends.ModelBackend",)
@@ -338,7 +342,7 @@ if check_oidc():
     OIDC_PRIVATE_KEYFILE = os.environ.get("OIDC_PRIVATE_KEYFILE")
 
     OIDC_RP_SIGN_ALGO = "RS256"
-    OIDC_RP_SCOPES = "openid profile email address phone"
+    OIDC_RP_SCOPES = "openid profile email address phone locale"
     OIDC_USE_PKCE = True
 
     discovery_info = discover_endpoints(
@@ -378,3 +382,6 @@ OLWIDGET = {
 
 # Limit maximum allowed area of an order, in square meters. 0 for unlimited
 MAX_ORDER_AREA=float(os.environ.get("MAX_ORDER_AREA", "0"))
+
+# 25 Megabytes
+DATA_UPLOAD_MAX_MEMORY_SIZE=int(os.environ.get("DATA_UPLOAD_MAX_MEMORY_SIZE", "26214400"))
