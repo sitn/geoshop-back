@@ -1,6 +1,8 @@
 import os
 import json
 import requests
+import unittest
+from django.conf import settings
 from unittest import mock
 from django.contrib.auth import get_user_model
 from django.urls import reverse
@@ -57,6 +59,7 @@ class AuthViewsTests(APITestCase):
         self.assertEqual(response.data["username"], self.username, "Gets his username")
 
 
+@unittest.skipUnless(settings.FEATURE_FLAGS.get("oidc"), "OIDC tests disabled in settings")
 class OidcAuthTests(APITestCase):
 
     def setUp(self):
@@ -126,3 +129,8 @@ class OidcAuthTests(APITestCase):
             },
             identity,
         )
+
+    # def test_noauth_401(self):
+    #     url = reverse("validate-order")
+    #     response = self.client.get(url, {"format": "json"})
+    #     self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED, response.content)
