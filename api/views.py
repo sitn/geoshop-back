@@ -1,5 +1,6 @@
 import mimetypes
 from pathlib import Path
+import shapely.geometry
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
@@ -35,7 +36,7 @@ from .serializers import (
     PasswordResetSerializer, PasswordResetConfirmSerializer,
     PricingSerializer, ProductSerializer, ProductDigestSerializer, PublicOrderSerializer,
     ProductFormatSerializer, RegisterSerializer, UserChangeSerializer,
-    VerifyEmailSerializer, ValidationSerializer)
+    VerifyEmailSerializer, ValidationSerializer, UntypedOrderSerializer)
 
 from .helpers import send_geoshop_email
 
@@ -355,9 +356,8 @@ class ExtractOrderView(views.APIView):
     """
     permission_classes = [ExtractGroupPermission]
 
-    @extend_schema(
-            responses=ExtractOrderSerializer
-    )
+    # def
+    @extend_schema(responses=ExtractOrderSerializer)
     def get(self, request, *args, **kwargs):
         # Start by getting orderitems that are PENDING and that will be extracted by current user
         order_items = OrderItem.objects.filter(
@@ -612,7 +612,8 @@ class DownloadView(generics.RetrieveAPIView):
                 with open(file, 'rb') as result:
                     response = Response(
                         headers={
-                            'Content-Disposition': f'attachment; filename="${file.name}"',
+                            'Content-Length': file.stat().st_size,
+                            'Content-Disposition': f'attachment; filename="{file.name}"',
                             'Content-Type': actualType if actualType else 'application/octet-stream'
                         },
                     )
@@ -688,3 +689,22 @@ class VerifyEmailView(views.APIView, ConfirmEmailView):
         confirmation = self.get_object()
         confirmation.confirm(self.request)
         return Response({'detail': _('ok')}, status=status.HTTP_200_OK)
+
+class OrderValidateView(views.APIView):
+
+    allowed_methods = ('POST','OPTIONS','HEAD')
+    queryset = Product.objects.all()
+    serializer_class=UntypedOrderSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        serializer = UntypedOrderSerializer(data=request.data, context={'request': request}, partial=True)
+        data = {
+            "valid": serializer.is_valid(raise_exception=False),
+        }
+        data["error"] = serializer.errors
+        if 'excludedGeom' in serializer.validated_data:
+            data['excludedGeom'] = serializer.validated_data['excludedGeom'].ewkt
+        if 'geom' in serializer.validated_data:
+            data['geom'] = serializer.validated_data['geom'].ewkt
+        return Response(data)

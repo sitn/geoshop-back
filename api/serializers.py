@@ -1,7 +1,5 @@
 import json
 import copy
-import shapely
-import shapely.ops as ops
 from shapely.geometry.polygon import Polygon
 
 from django.conf import settings
@@ -9,7 +7,7 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.forms import PasswordResetForm, SetPasswordForm
 from django.contrib.auth.tokens import default_token_generator
 from django.contrib.gis.gdal import GDALException
-from django.contrib.gis.geos import Polygon, GEOSException, GEOSGeometry, WKTWriter
+from django.contrib.gis.geos import Polygon, MultiPolygon, GEOSException, GEOSGeometry, WKTWriter
 from django.utils.translation import gettext_lazy as _
 from django.utils.encoding import force_str
 from django.utils.http import urlsafe_base64_decode
@@ -22,9 +20,9 @@ from allauth.account.adapter import get_adapter
 
 from .helpers import send_geoshop_email, zip_all_orderitems
 from .models import (
-    Copyright, Contact, Document, DataFormat, Identity,
+    Copyright, Contact, Document, DataFormat, Group, Identity,
     Metadata, MetadataCategoryEch, MetadataContact, Order, OrderItem, OrderType,
-    Pricing, Product, ProductFormat, UserChange)
+    Pricing, Product, ProductFormat, ProductOwnership, UserChange)
 
 from typing import List, Dict
 
@@ -233,6 +231,17 @@ class OrderDigestSerializer(serializers.HyperlinkedModelSerializer):
             'part_vat_currency', 'part_vat', 'extract_result',
             'invoice_contact']
 
+class OrderItemProductField(serializers.RelatedField):
+
+    def to_representation(self, value):
+        return {
+            "id": value.id,
+            "label": value.label,
+            "pricing": {"pricing_type": value.pricing.pricing_type},
+        }
+
+    def to_internal_value(self, data):
+        return self.get_queryset().get(label=data["label"])
 
 class OrderItemSerializer(serializers.ModelSerializer):
     """
@@ -245,9 +254,7 @@ class OrderItemSerializer(serializers.ModelSerializer):
         queryset=DataFormat.objects.all(),
         slug_field='name'
     )
-    product = serializers.SlugRelatedField(
-        queryset=Product.objects.all(),
-        slug_field='label')
+    product = OrderItemProductField(queryset=Product.objects)
     product_id = serializers.PrimaryKeyRelatedField(read_only=True)
     product_provider = serializers.SerializerMethodField()
     available_formats = serializers.ListField(read_only=True)
@@ -299,16 +306,53 @@ class OrderSerializer(serializers.ModelSerializer):
     def validate(self, attrs):
         super().validate(attrs)
         self._errors = {}
-        if 'geom' not in attrs:
+        if ('geom' not in attrs):
             return attrs
-        geom = attrs['geom']
-        area = geom.area
-        if settings.MAX_ORDER_AREA > 0 and area > settings.MAX_ORDER_AREA:
+        requestedGeom = Polygon(
+            [xy[0:2] for xy in list(attrs['geom'].coords[0])],
+            srid=settings.DEFAULT_SRID
+        )
+        relevantOwnedAreas = ProductOwnership.objects.filter(
+            product__in=[ item['product'] for item in attrs['items']],
+            user_group__in=Group.objects.filter(user=self.context.get('request').user)
+        ).all()
+
+        ownedByProduct = {}
+        for area in relevantOwnedAreas:
+            ownedByProduct[area.product.label] = area.geom
+
+        allowedToQuery = 0
+        excludedOverflow = 0
+        excludedFromOrder = Polygon(
+            [xy[0:2] for xy in list(attrs['geom'].coords[0])],
+            srid=settings.DEFAULT_SRID,
+        )
+        for item in attrs['items']:
+            product = item['product']
+            # If max_order_area is zero, then product doesn't have limit by ordered area
+            if not product.max_order_area:
+                continue
+
+            # If product is not owned by user, then whole ordered area is excluded
+            ownedArea = ownedByProduct.get(product.label, MultiPolygon(srid=settings.DEFAULT_SRID))
+            excludedFromItem = requestedGeom.difference(ownedArea)
+            excludedFromOrder = excludedFromOrder.difference(ownedArea)
+
+            # If excluded area is less than max order area, then we can ignore it
+            if excludedFromItem.area <= product.max_order_area:
+                continue
+            excludedOverflow += excludedFromItem.area - product.max_order_area
+            allowedToQuery += (ownedArea.area + product.max_order_area)
+
+        attrs['excludedGeom'] = excludedFromOrder
+        if (excludedOverflow > 0):
             raise ValidationError({
                 'message': _(f'Order area is too large'),
-                'expected': settings.MAX_ORDER_AREA,
-                'actual': area
+                'expected': allowedToQuery,
+                'actual': requestedGeom.area,
+                'excluded': excludedFromOrder.area
             })
+
         return attrs
 
     class Meta:
@@ -413,6 +457,11 @@ class OrderSerializer(serializers.ModelSerializer):
         return instance
 
 
+class UntypedOrderSerializer(OrderSerializer):
+    order_type = None
+    class Meta(OrderSerializer.Meta):
+        exclude = ['order_type']
+
 class PublicOrderSerializer(OrderSerializer):
     """
     Meant to be accessed by token
@@ -423,6 +472,10 @@ class PublicOrderSerializer(OrderSerializer):
             'date_downloaded', 'extract_result', 'download_guid'
         ]
 
+class PricingSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Pricing
+        fields = '__all__'
 
 class ProductSerializer(serializers.ModelSerializer):
     """
@@ -436,8 +489,7 @@ class ProductSerializer(serializers.ModelSerializer):
         lookup_field='id_name'
     )
 
-    pricing = serializers.StringRelatedField(
-        read_only=True)
+    pricing = PricingSerializer(read_only=True)
 
     provider = serializers.CharField(
         source='provider.identity.company_name',
@@ -450,7 +502,7 @@ class ProductSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Product
-        read_only_fields = ['pricing', 'label', 'group', 'metadata_summary']
+        read_only_fields = ['pricing', 'label', 'group', 'metadata_summary', 'max_order_area']
         exclude = ['order', 'ts', 'geom']
 
 
@@ -471,6 +523,7 @@ class ExtractOrderItemSerializer(OrderItemSerializer):
     Orderitem serializer for extract. Allows to upload file of orderitem.
     """
     extract_result = serializers.FileField(required=False)
+    extract_result_size = serializers.IntegerField(required=False)
     product = ProductExtractSerializer(read_only=True)
     data_format = serializers.StringRelatedField(read_only=True)
     is_rejected = serializers.BooleanField(required=False)
@@ -495,6 +548,8 @@ class ExtractOrderItemSerializer(OrderItemSerializer):
             instance.status = OrderItem.OrderItemStatus.REJECTED
         if instance.extract_result.name != '':
             instance.status = OrderItem.OrderItemStatus.PROCESSED
+        if instance.extract_result:
+            instance.extract_result_size = instance.extract_result.size
         instance.save()
         status = instance.order.next_status_on_extract_input()
         if status == Order.OrderStatus.PROCESSED:
@@ -598,12 +653,6 @@ class PasswordResetConfirmSerializer(serializers.Serializer):
         return self.set_password_form.save()
 
 
-class PricingSerializer(serializers.HyperlinkedModelSerializer):
-    class Meta:
-        model = Pricing
-        fields = '__all__'
-
-
 class ProductFormatSerializer(serializers.ModelSerializer):
     product = serializers.SlugRelatedField(
         queryset=Product.objects.all(),
@@ -628,11 +677,7 @@ class DataFormatListSerializer(ProductFormatSerializer):
 
 
 class ProductDigestSerializer(ProductSerializer):
-    pricing = serializers.SlugRelatedField(
-        required=False,
-        queryset=DataFormat.objects.all(),
-        slug_field='name'
-    )
+    pricing = PricingSerializer(read_only=True)
     provider = serializers.CharField(
         source='provider.identity.company_name',
         read_only=True)

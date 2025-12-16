@@ -1,5 +1,3 @@
-version: "3"
-
 networks:
   geoshop:
     driver: bridge
@@ -36,14 +34,15 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      oidcdemo:
+        condition: service_healthy
     env_file: .env
     environment:
       PGHOST: "db"
     command: >
       bash -c "
       python3 manage.py migrate &&
-      python3 manage.py collectstatic --noinput &&
-      python3 manage.py fixturize"
+      python3 manage.py collectstatic --noinput"
     volumes:
       - "static-files:/app/geoshop_back/static:rw"
     networks:
@@ -53,6 +52,8 @@ services:
     image: geoshop-api
     depends_on:
       db:
+        condition: service_healthy
+      oidcdemo:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
@@ -72,10 +73,24 @@ services:
       retries: 5
     volumes:
       - "static-files:/app/geoshop_back/static:ro"
+      - "./testdata:/testdata:ro"
     ports:
       - "8000:8000"
     networks:
       - geoshop
 
+  oidcdemo:
+    image: python:alpine
+    command: sh -c "apk add curl && python -m http.server -d /data 1234"
+    volumes:
+      - ./testdata:/testdata:ro
+      - ./testdata/openid-wellknown.json:/data/.well-known/openid-configuration:ro
+    networks:
+      - geoshop
+    healthcheck:
+      test: curl -f http://127.0.0.1:1234/.well-known/openid-configuration || exit 1,
+      interval: 10s
+      timeout: 20s
+      retries: 5
 volumes:
   static-files:

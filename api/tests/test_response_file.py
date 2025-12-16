@@ -1,6 +1,7 @@
 import os
 import json
 from django.conf import settings
+from django.test import override_settings
 import tempfile
 from uuid import uuid4
 from django.urls import reverse
@@ -22,6 +23,7 @@ ITEM_NOTFOUND_UUID = str(uuid4())
 TMP_CONTENT="Hello world"
 
 
+@override_settings(LANGUAGE_CODE='en')
 class TestResponseFile(APITestCase):
     """
     Test sending extract result files
@@ -29,9 +31,9 @@ class TestResponseFile(APITestCase):
     order_data = {
             "order_type": "Privé",
             "items": [
-                {"product": "Maquette 3D"},
-                {"product": "Maquette 3D"},
-                {"product": "Maquette 3D"},
+                {"product": {"label": "Maquette 3D"}},
+                {"product": {"label": "Maquette 3D"}},
+                {"product": {"label": "Maquette 3D"}},
             ],
             "title": "Test file exists",
             "description": "Nice order",
@@ -78,6 +80,7 @@ class TestResponseFile(APITestCase):
     def testSendOrderFileSuccess(self):
         url = reverse("download_by_uuid", kwargs={"guid": ORDER_EXISTS_UUID})
         resp = self.client.get(url)
+        self.assertEqual("11", resp.headers["Content-length"])
         self.assertEqual(TMP_CONTENT, str(resp.content, "utf8"))
 
     def testSendOrderNotFound(self):
@@ -95,6 +98,7 @@ class TestResponseFile(APITestCase):
     def testSendItemFileSuccess(self):
         url = reverse("download_by_uuid", kwargs={"guid": ITEM_EXISTS_UUID})
         resp = self.client.get(url)
+        self.assertEqual("11", resp.headers["Content-length"])
         self.assertEqual(TMP_CONTENT[::-1], str(resp.content, "utf8"))
 
     def testSendItemNotFound(self):

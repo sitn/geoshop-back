@@ -107,6 +107,7 @@ class ProductGroupTests(APITestCase):
         response = self.client.get(url, format='json')
         self.assertEqual(response.status_code, status.HTTP_200_OK, response.content)
         self.assertEqual(len(response.data), 4, 'Check that all products are visible')
+        self.assertTrue(all("id" in p["pricing"] for p in response.data["results"]))
 
     def test_groups_are_expanded_when_confirmed(self):
         """
@@ -163,3 +164,37 @@ class ProductGroupTests(APITestCase):
             Order.OrderStatus.PARTIALLY_DELIVERED,
             "Check order status is partially delivered"
         )
+
+    def test_search_vector_label_updated(self):
+        """
+        SearchVector field must be updated when Product is created or updated.
+        """
+        tsBefore = self.products[0].ts
+        self.assertNotEqual(tsBefore, "", 'Check SearchVector is set on creation')
+        self.products[0].label = "New label whatever"
+        self.products[0].save()
+        self.products[0].refresh_from_db()
+        tsAfter = self.products[0].ts
+        self.assertNotEqual(tsBefore, tsAfter, 'SearchVector is changed after update')
+        self.assertIn('new', tsAfter, 'Check SearchVector contains new word')
+        self.assertIn('whatever', tsAfter, 'Check SearchVector contains new word')
+        self.assertNotIn('réseau', self.products[0].ts, 'Check SearchVector does not contain old word')
+
+
+    def test_search_vector_metadata_updated(self):
+        """
+        SearchVector field must be updated when Product is created or updated.
+        """
+        tsBefore = [p.ts for p in self.products]
+        self.assertNotEqual(tsBefore, "", 'Check SearchVector is set on creation')
+        self.config.public_metadata.description_long = "hello world metadata"
+        self.config.public_metadata.save()
+
+        for p in self.products:
+            p.refresh_from_db()
+        tsAfter = [p.ts for p in self.products]
+        self.assertNotEqual(tsBefore, tsAfter, 'SearchVector is changed after update')
+
+        for ts in tsAfter:
+            self.assertIn('world', ts, 'Check SearchVector contains world word')
+            self.assertIn('metadata', ts, 'Check SearchVector contains metadata word')

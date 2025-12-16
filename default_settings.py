@@ -21,19 +21,21 @@ DEBUG = False
 # Only for windows dev mode without docker
 if os.name == 'nt' and os.environ.get('DEBUG'):
     DEBUG = True
-    GDAL_LIBRARY_PATH = 'C:/OSGeo4W/bin/gdal302'
-    GEOS_LIBRARY_PATH = 'C:/OSGeo4W/bin/geos_c'
+    GDAL_LIBRARY_PATH = os.environ.get('GDAL_LIBRARY_PATH', 'C:/OSGeo4W/bin/gdal302')
+    GEOS_LIBRARY_PATH = os.environ.get('GEOS_LIBRARY_PATH', 'C:/OSGeo4W/bin/geos_c')
 
 ALLOWED_HOSTS = os.environ["ALLOWED_HOST"].split(",")
-EMAIL_HOST = os.environ.get('EMAIL_HOST', 'localhost')
-EMAIL_PORT = os.environ.get('EMAIL_PORT', 1025)
-# Setting to test email sending in console
-EMAIL_BACKEND = os.environ.get('EMAIL_BACKEND', 'django.core.mail.backends.console.EmailBackend')
 
-#
 DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', 'DEFAUL_FROM_EMAIL@example.com')
 ADMIN_EMAIL_LIST = os.environ.get('ADMIN_EMAIL_LIST', 'ADMIN_EMAIL_LIST@example.com')
 REPLY_TO_EMAIL = os.environ.get('REPLY_TO_EMAIL', 'REPLY_TO_EMAIL@example.ch')
+
+EMAIL_HOST = os.environ.get('EMAIL_HOST', 'localhost')
+EMAIL_PORT = os.environ.get('EMAIL_PORT', 1025)
+EMAIL_HOST_USER = os.environ.get('EMAIL_HOST_USER')
+EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD')
+EMAIL_USE_TLS=True
+EMAIL_BACKEND = os.environ.get('EMAIL_BACKEND', 'django.core.mail.backends.console.EmailBackend')
 
 # Application definition
 
@@ -59,6 +61,7 @@ INSTALLED_APPS = [
     'health_check.db',
     'health_check.contrib.migrations',
     'django_extended_ol',
+    'pgtrigger',
 ]
 
 MIDDLEWARE = [
@@ -247,6 +250,7 @@ MEDIA_URL = os.environ.get('MEDIA_URL', FORCE_SCRIPT_NAME + ROOTURL +'/files/')
 
 FRONT_PROTOCOL = os.environ["FRONT_PROTOCOL"]
 FRONT_URL = os.environ["FRONT_URL"]
+BACKEND_URL = os.environ.get("BACKEND_URL", "localhost:8000")
 FRONT_HREF = os.environ.get("FRONT_HREF", '')
 CSRF_COOKIE_DOMAIN = os.environ["CSRF_COOKIE_DOMAIN"]
 CSRF_TRUSTED_ORIGINS = []
@@ -254,6 +258,9 @@ CSRF_TRUSTED_ORIGINS = []
 for host in ALLOWED_HOSTS:
     CSRF_TRUSTED_ORIGINS.append(f'http://{host}')
     CSRF_TRUSTED_ORIGINS.append(f'https://{host}')
+
+CORS_ALLOWED_ORIGINS = os.environ['CORS_ALLOWED_ORIGINS'].split(',') if 'CORS_ALLOWED_ORIGINS' in os.environ else []
+CORS_ALLOWED_ORIGIN_REGEXES = os.environ['CORS_ALLOWED_ORIGIN_REGEXES'].split(',') if 'CORS_ALLOWED_ORIGIN_REGEXES' in os.environ else []
 
 CORS_ORIGIN_WHITELIST = [
     os.environ["FRONT_PROTOCOL"] + '://' + os.environ["FRONT_URL"],
@@ -285,6 +292,7 @@ HEALTH_CHECK = {
 FEATURE_FLAGS = {
     "oidc": os.environ.get("OIDC_ENABLED", "False") == "True",
     "registration": os.environ.get("REGISTRATION_ENABLED", "True") == "True",
+    "local_auth": os.environ.get("LOCAL_AUTH_ENABLED", "True") == "True"
 }
 
 AUTHENTICATION_BACKENDS = ("django.contrib.auth.backends.ModelBackend",)
@@ -338,7 +346,7 @@ if check_oidc():
     OIDC_PRIVATE_KEYFILE = os.environ.get("OIDC_PRIVATE_KEYFILE")
 
     OIDC_RP_SIGN_ALGO = "RS256"
-    OIDC_RP_SCOPES = "openid profile email address phone"
+    OIDC_RP_SCOPES = "openid profile email address phone locale"
     OIDC_USE_PKCE = True
 
     discovery_info = discover_endpoints(
@@ -350,6 +358,7 @@ if check_oidc():
     OIDC_OP_USER_ENDPOINT = discovery_info["userinfo_endpoint"]
     OIDC_OP_JWKS_ENDPOINT = discovery_info["jwks_uri"]
 
+    OIDC_REDIRECT_ALLOWED_HOSTS = os.environ["OIDC_REDIRECT_ALLOWED_HOST"].split(",") if "OIDC_REDIRECT_ALLOWED_HOST" in os.environ else []
     LOGIN_REDIRECT_URL = os.environ.get("OIDC_REDIRECT_BASE_URL") + "/oidc/callback"
     LOGOUT_REDIRECT_URL = os.environ.get("OIDC_REDIRECT_BASE_URL") + "/"
     LOGIN_URL = os.environ.get("OIDC_REDIRECT_BASE_URL") + "/oidc/authenticate"
@@ -378,3 +387,6 @@ OLWIDGET = {
 
 # Limit maximum allowed area of an order, in square meters. 0 for unlimited
 MAX_ORDER_AREA=float(os.environ.get("MAX_ORDER_AREA", "0"))
+
+# 25 Megabytes
+DATA_UPLOAD_MAX_MEMORY_SIZE=int(os.environ.get("DATA_UPLOAD_MAX_MEMORY_SIZE", "26214400"))
