@@ -1,6 +1,3 @@
-from pathlib import Path
-import os
-
 from django import forms
 from django.conf import settings
 from django.contrib import messages
@@ -10,7 +7,6 @@ from django.contrib.gis import admin
 from django.http import HttpResponseRedirect
 from django.utils.translation import gettext_lazy as _
 from django_extended_ol.forms.widgets import WMTSWidget
-from django.contrib.auth.models import Group
 
 from .helpers import send_geoshop_email
 from .models import (
@@ -198,7 +194,6 @@ class OrderAdmin(CustomGeoModelAdmin):
             if item.extract_result.name:
                 item.extract_result_size = item.extract_result.size
                 item.save()
-        
         return super().response_change(request, obj)
 
 class ProductOwnershipAdmin(CustomGeoModelAdmin):
