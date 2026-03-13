@@ -1,6 +1,5 @@
 import mimetypes
 from pathlib import Path
-import shapely.geometry
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
